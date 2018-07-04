@@ -1,0 +1,123 @@
+---
+title: "Practical Machine Learning course project"
+author: "Nageswara Yedida"
+date: "July 2, 2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+```
+
+### Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect
+a large amount of data about personal activity relatively inexpensively. One thing that people regularly do is
+quantify how much of a particular activity they do, but they rarely quantify how well they
+do it. In this project, the goal is to use data from accelerometers on the belt,
+forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts
+correctly and incorrectly in 5 different ways. More information is available from the
+website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.pucrio.
+br/har (see the section on the Weight Lifting Exercise Dataset).
+
+### Getting Data
+The training data for this project are available at:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+The test data are available at:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+We will load the data using R.
+```{r}
+hartrain <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", stringsAsFactors = FALSE, na.strings = c("NA","#DIV/0!", ""))
+hartest <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", stringsAsFactors = FALSE, na.strings = c("NA","#DIV/0!", ""))
+```
+
+### Cleaning Data
+A quick look at the data reveals that there are many variables containing predominantly NA values. We will remove variables that have more than 95% NA values, from the list of predictors.
+
+```{r}
+z <- apply(hartrain, 2, function(col)sum(is.na(col))/length(col))
+nacolumns <- z[z > .95]
+
+har.tr <- hartrain[, !names(hartrain) %in% names(nacolumns)]
+```
+Also the first 7 columns are not device readings related to the work out and are omitted from the list of predictors.
+```{r}
+har.tr <- har.tr[, -c(1:7)]
+```
+
+### Predicting with Trees
+Using caret package a tree model is fit to the data utilizing the CART model's rpart method.
+```{r}
+library(caret)        
+modFit1 <- train(classe ~., method = "rpart", data = har.tr)
+modFit1 <- caret::train(classe ~ ., method = "rpart", data = har.tr,
+                       trControl=trainControl(method="none"),
+                       tuneGrid=data.frame(cp=0.01))
+``` 
+
+
+```{r echo=TRUE, fig.height=10,fig.width=12, fig.align='center'}
+library(rattle)
+fancyRpartPlot(modFit1$finalModel, sub = "")
+predictions1 <- predict(modFit1, newdata = har.tr[,-53])
+confusionMatrix(predictions1, factor(har.tr$classe))
+```
+
+This tree model resulted in around 75% classification accuracy. As can be seen from the confusion matrix a singnificant instances have been misclassified. We can improve the prediction accuracy using a randomForest algorithm which is known to fit models with high accuracy.
+
+```{r echo=TRUE}
+set.seed(95014)
+inTraining <- createDataPartition(har.tr$classe, p = .75, list=FALSE)
+training <- har.tr[inTraining,]
+testing <- har.tr[-inTraining,]
+
+x <- training[,-53]
+y <- training[,53]
+```
+
+```{r echo=FALSE}
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+```
+
+```{r echo=TRUE}
+# We will configure caret to do 5 fold cross validation while fitting the model
+fitControl <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
+```
+
+```{r echo=TRUE}
+fit <- train(x,y, method="rf", trControl = fitControl)
+fit
+```
+The model was fit by generating 500 trees and 5-fold cross validation was done as configured.
+
+```{r echo=FALSE}
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+```{r echo=TRUE}
+fit$finalModel
+```
+It was robust model fit as indicated by the expected out of sample error rate of 0.64%. We can now use the model to do prediction on the held out test set.
+
+```{r echo=TRUE}
+predictionsRF <- predict(fit, testing[,-53])
+confusionMatrix(predictionsRF, factor(testing$classe))
+```
+
+The prediction accuracy of 99.49% indicates a pretty good prediction. The resulting actual test error rate of 0.51% is close to the OOB estimate as given by model fit above.
+
+We can get the variable importance from the model. The top 10 vaiables are plotted here.
+
+```{r echo=TRUE}
+plot(varImp(fit), top = 10)
+```
+
+
+
